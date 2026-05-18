@@ -162,6 +162,22 @@
 
   ::-webkit-scrollbar { width: 3px; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  
+  #map-wrap {
+  contain: layout paint;
+}
+
+#overlay-canvas {
+  transform: translateZ(0);
+  image-rendering: auto;
+  backface-visibility: hidden;
+}
+
+.leaflet-map-pane,
+.leaflet-overlay-pane,
+.leaflet-tile-pane {
+  will-change: transform;
+}
 </style>
 </head>
 <body>
@@ -294,23 +310,47 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r
   subdomains: 'abcd', maxZoom: 19
 }).addTo(map);
 
-setTimeout(() => { map.invalidateSize(); scheduleRedraw(); }, 200);
+setTimeout(() => {
+  map.invalidateSize({ animate: false });
+  resizeCanvas();
+  scheduleRedraw();
+}, 260);
 
 // ── CANVAS OVERLAY ───────────────────────────────────────────────────────────
-// A plain <canvas> absolutely positioned over the map container.
-// Redrawn completely on every map move/zoom — no coordinate system confusion,
-// works identically in Chrome and Firefox.
 const canvas = document.getElementById('overlay-canvas');
-const ctx    = canvas.getContext('2d');
+const ctx = canvas.getContext('2d', {
+  alpha: true,
+  desynchronized: true
+});
+
+let DPR = Math.max(window.devicePixelRatio || 1, 1);
 
 function resizeCanvas() {
   const wrap = document.getElementById('map-wrap');
-  canvas.width  = wrap.clientWidth;
-  canvas.height = wrap.clientHeight;
+
+  DPR = Math.max(window.devicePixelRatio || 1, 1);
+
+  const width = wrap.clientWidth;
+  const height = wrap.clientHeight;
+
+  canvas.style.width = width + 'px';
+  canvas.style.height = height + 'px';
+
+  canvas.width = Math.floor(width * DPR);
+  canvas.height = Math.floor(height * DPR);
+
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+
   scheduleRedraw();
 }
+
 resizeCanvas();
-new ResizeObserver(resizeCanvas).observe(document.getElementById('map-wrap'));
+
+new ResizeObserver(() => {
+  resizeCanvas();
+}).observe(document.getElementById('map-wrap'));
+
+window.addEventListener('resize', resizeCanvas);
 
 // ── HELPERS ──────────────────────────────────────────────────────────────────
 function categorize(apt) {
@@ -426,81 +466,52 @@ function scheduleRedraw() {
 }
 
 function drawOverlay() {
-  const W = canvas.width, H = canvas.height;
-  ctx.clearRect(0, 0, W, H);
-  if (!filteredAirports.length) return;
+        if (!valid) continue;
 
-  const zoom = map.getZoom();
+        const colour = aptColour(visible[i].icao || visible[i].name);
+        const rgb = hexToRgb(colour);
 
-  // ── Step 1: Project ALL filtered airports to pixel coords ──────────────────
-  // We do this first so we can filter by pixel distance, not lat/lon.
-  // This avoids the spike/wrap bug where airports on the far side of the world
-  // project to huge negative/positive pixel values and corrupt the Delaunay.
-  const allPts = filteredAirports.map(a => {
-    const p = map.latLngToContainerPoint([a.lat, a.lon]);
-    return [p.x, p.y];
-  });
+        ctx.beginPath();
+        ctx.moveTo(cell[0][0], cell[0][1]);
 
-  // ── Step 2: Keep only points within a pixel-space margin of the canvas ─────
-  // Large margin so Voronoi cells at the edges have neighbours and don't spike.
-  // But exclude anything wildly off-screen (wrapped globe artifacts).
-  const margin  = Math.max(W, H) * 1.2;
-  const maxApts = zoom < 4 ? 600 : zoom < 6 ? 1500 : zoom < 9 ? 5000 : 18000;
+        for (let j = 1; j < cell.length; j++) {
+          ctx.lineTo(cell[j][0], cell[j][1]);
+        }
 
-  const indices = [];
-  for (let i = 0; i < allPts.length; i++) {
-    const [x, y] = allPts[i];
-    if (x > -margin && x < W + margin && y > -margin && y < H + margin) {
-      indices.push(i);
-      if (indices.length >= maxApts) break;
+        ctx.closePath();
+
+        ctx.fillStyle = `rgba(${rgb},0.32)`;
+        ctx.fill();
+
+        ctx.strokeStyle = `rgba(${rgb},0.7)`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    } catch (err) {
+      console.warn('Voronoi render failed', err);
     }
   }
 
-  if (indices.length < 2) return;
-
-  const pts     = indices.map(i => allPts[i]);
-  const visible = indices.map(i => filteredAirports[i]);
-
-  // ── Step 3: Voronoi ────────────────────────────────────────────────────────
-  if (overlayVisible && pts.length >= 3) {
-    // Clip rect = canvas only. Points outside canvas act as neighbours to
-    // anchor edge cells — we just don't draw those off-canvas cells.
-    const delaunay = d3.Delaunay.from(pts);
-    const voronoi  = delaunay.voronoi([0, 0, W, H]);
-
-    for (let i = 0; i < pts.length; i++) {
-      const cell = voronoi.cellPolygon(i);
-      if (!cell || cell.length < 3) continue;
-
-      const colour = aptColour(visible[i].icao || visible[i].name);
-      const rgb    = hexToRgb(colour);
-
-      ctx.beginPath();
-      ctx.moveTo(cell[0][0], cell[0][1]);
-      for (let j = 1; j < cell.length; j++) ctx.lineTo(cell[j][0], cell[j][1]);
-      ctx.closePath();
-      ctx.fillStyle   = `rgba(${rgb},0.38)`;
-      ctx.fill();
-      ctx.strokeStyle = `rgba(${rgb},0.8)`;
-      ctx.lineWidth   = 1;
-      ctx.stroke();
-    }
-  }
-
-  // ── Step 4: Dots (on-screen only) ─────────────────────────────────────────
+  // ── Airport dots ──────────────────────────────────────────────────
   for (let i = 0; i < pts.length; i++) {
     const [x, y] = pts[i];
-    if (x < -8 || y < -8 || x > W + 8 || y > H + 8) continue;
+
+    if (x < -10 || y < -10 || x > W + 10 || y > H + 10) continue;
+
     const a = visible[i];
     const r = dotRadius(a.cat);
+
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
-    ctx.fillStyle   = dotColor(a.cat);
+
     ctx.globalAlpha = a.cat === 'closed' ? 0.4 : 0.95;
+    ctx.fillStyle = dotColor(a.cat);
     ctx.fill();
+
     ctx.globalAlpha = 1;
-    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
-    ctx.lineWidth   = 0.6;
+
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = 0.7;
     ctx.stroke();
   }
 
@@ -624,8 +635,11 @@ async function loadAirports() {
 loadAirports();
 
 // ── MAP EVENTS ───────────────────────────────────────────────────────────────
-map.on('move',             scheduleRedraw);
-map.on('moveend zoomend',  scheduleRedraw);
+map.on('move', scheduleRedraw);
+map.on('moveend', scheduleRedraw);
+map.on('zoom', scheduleRedraw);
+map.on('zoomend', scheduleRedraw);
+map.on('resize', scheduleRedraw);
 </script>
 </body>
 </html>
