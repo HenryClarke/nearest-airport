@@ -1,0 +1,631 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NEAREST AIRPORT // VORONOI</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Oswald:wght@300;400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+  :root {
+    --amber: #ffb300;
+    --cyan: #00e5ff;
+    --red: #ff3b30;
+    --green: #39ff14;
+    --bg: #0a0c0f;
+    --panel: #0f1318;
+    --border: #1e2530;
+    --text: #c8d8e8;
+    --text-dim: #4a5a6a;
+    --mono: 'Share Tech Mono', monospace;
+    --display: 'Oswald', sans-serif;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: var(--mono);
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+
+  /* ── DEV BANNER ── */
+  #dev-banner {
+    background: #ffbe00;
+    color: #1a1000;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.5px;
+    padding: 6px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+    text-align: center;
+    line-height: 1.5;
+    border-bottom: 2px solid #e0a000;
+  }
+  #dev-banner strong { font-weight: bold; letter-spacing: 1px; }
+  #dev-banner a { color: #1a1000; font-weight: bold; text-decoration: underline; }
+  #dev-banner a:hover { opacity: 0.7; }
+  #banner-close {
+    position: absolute; right: 12px;
+    background: none; border: none; cursor: pointer;
+    font-size: 14px; color: #1a1000; opacity: 0.6; padding: 0 4px;
+    font-family: var(--mono);
+  }
+  #banner-close:hover { opacity: 1; }
+
+  /* ── HEADER ── */
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 8px 16px;
+    background: var(--panel); border-bottom: 1px solid var(--border);
+    flex-shrink: 0; z-index: 1000; flex-wrap: wrap;
+    position: relative;
+  }
+  .logo {
+    font-family: var(--display); font-weight: 600; font-size: 14px;
+    letter-spacing: 3px; color: var(--amber); white-space: nowrap; text-transform: uppercase;
+  }
+  .logo span { color: var(--text-dim); font-weight: 300; }
+  .vsep { width: 1px; height: 24px; background: var(--border); flex-shrink: 0; }
+  .filter-group { display: flex; align-items: center; gap: 5px; }
+  .filter-group-label { font-size: 9px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; margin-right: 2px; }
+
+  .pill {
+    background: transparent; border: 1px solid var(--border);
+    color: var(--text-dim); font-family: var(--mono); font-size: 10px;
+    letter-spacing: 1px; padding: 3px 9px; cursor: pointer;
+    transition: all .12s; text-transform: uppercase; white-space: nowrap; line-height: 1.4;
+  }
+  .pill:hover { border-color: #555; color: var(--text); }
+  .pill.active { border-color: var(--amber); color: var(--amber); background: rgba(255,179,0,.10); }
+  .pill.overlay-toggle { border-color: #555; color: var(--text-dim); }
+  .pill.overlay-toggle.active {
+    border-color: var(--cyan); color: var(--cyan);
+    background: rgba(0,229,255,.10); box-shadow: 0 0 8px rgba(0,229,255,.2);
+  }
+
+  /* ── STATUS BAR ── */
+  .statusbar {
+    display: flex; align-items: center; gap: 14px; padding: 4px 16px;
+    background: var(--bg); border-bottom: 1px solid var(--border);
+    font-size: 10px; color: var(--text-dim); letter-spacing: 1px; flex-shrink: 0;
+  }
+  .statusbar .val { color: var(--amber); }
+  .loading { color: var(--cyan); animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-dim); flex-shrink: 0; }
+  .dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+  /* ── LAYOUT ── */
+  .main { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+  #map-wrap { position: relative; flex: 1; overflow: hidden; min-width: 0; }
+  #map { position: absolute; inset: 0; cursor: crosshair !important; }
+
+  /* Canvas sits on top of map, pointer-events:none so map stays interactive */
+  #overlay-canvas {
+    position: absolute; inset: 0;
+    pointer-events: none;
+    z-index: 450;
+  }
+
+  /* Leaflet */
+  .leaflet-container { background: #d4e5f0; }
+  .leaflet-control-attribution { background: rgba(255,255,255,.75) !important; color: #777 !important; font-size: 9px !important; }
+  .leaflet-bar a { background: var(--panel) !important; color: var(--amber) !important; border-color: var(--border) !important; font-family: var(--mono) !important; }
+  .leaflet-bar a:hover { background: #1a2230 !important; }
+
+  /* ── TOOLTIP ── */
+  #tooltip {
+    position: fixed; pointer-events: none; z-index: 9999; display: none;
+    background: rgba(10,12,15,.96); border: 1px solid var(--amber);
+    padding: 10px 14px; min-width: 210px; box-shadow: 0 6px 30px rgba(0,0,0,.7);
+  }
+  #tooltip .tt-code { font-family: var(--display); font-size: 24px; font-weight: 600; color: var(--amber); letter-spacing: 2px; line-height: 1; }
+  #tooltip .tt-name { font-size: 11px; color: var(--text); margin: 4px 0 8px; line-height: 1.3; }
+  #tooltip .tt-row { display: flex; justify-content: space-between; font-size: 10px; color: var(--text-dim); margin-top: 3px; gap: 12px; }
+  #tooltip .tt-row .tv { color: var(--text); }
+  .tt-badge { display: inline-block; font-size: 9px; letter-spacing: 1.5px; padding: 2px 6px; border: 1px solid; margin-bottom: 6px; }
+
+  /* ── PANEL COLLAPSE ── */
+  .panel {
+    width: 230px; flex-shrink: 0;
+    background: var(--panel); border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden;
+    transition: width 0.25s ease, border-color 0.25s ease;
+  }
+  .panel.collapsed {
+    width: 0;
+    border-left-color: transparent;
+  }
+  .panel.collapsed > * { display: none; }
+  .panel-section { border-bottom: 1px solid var(--border); padding: 11px 13px; }
+  .panel-title { font-family: var(--display); font-size: 9px; letter-spacing: 3px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 9px; }
+  .legend-item { display: flex; align-items: center; gap: 7px; margin-bottom: 5px; font-size: 10px; color: var(--text-dim); }
+  .legend-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .stat-row { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 10px; }
+  .stat-label { color: var(--text-dim); } .stat-val { color: var(--amber); }
+  .nearest-info { flex: 1; overflow-y: auto; padding: 11px 13px; }
+  .ni-label { font-size: 9px; letter-spacing: 2px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 5px; }
+  .ni-code { font-family: var(--display); font-size: 26px; color: var(--amber); letter-spacing: 2px; line-height: 1; }
+  .ni-name { font-size: 11px; color: var(--text); margin: 4px 0 8px; line-height: 1.4; }
+  .ni-row { display: flex; justify-content: space-between; font-size: 10px; margin-top: 3px; }
+  .ni-key { color: var(--text-dim); } .ni-val { color: var(--text); }
+  .hint { padding: 11px 13px; font-size: 10px; color: var(--text-dim); line-height: 1.7; border-top: 1px solid var(--border); margin-top: auto; }
+
+  ::-webkit-scrollbar { width: 3px; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- DEV BANNER -->
+<div id="dev-banner" style="position:relative;">
+  <span>
+    <strong>⚠ BETA / IN DEVELOPMENT</strong> —
+    Data may be inaccurate. Regions are approximate and may contain bugs.
+    Please send feedback &amp; bug reports to
+    <a href="mailto:henry@henryclarke.uk">henry@henryclarke.uk</a>
+  </span>
+  <button id="banner-close" onclick="document.getElementById('dev-banner').style.display='none'" title="Dismiss">✕</button>
+</div>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">VOR<span>/</span>MAP <span>// NEAREST AIRPORT</span></div>
+  <div class="vsep"></div>
+
+  <button class="pill overlay-toggle active" id="btn-overlay" onclick="toggleOverlay()">⬡ Regions ON</button>
+
+  <div class="vsep"></div>
+
+  <div class="filter-group">
+    <span class="filter-group-label">Size</span>
+    <button class="pill active" id="f-large"    onclick="toggleFilter('large')">Large</button>
+    <button class="pill"        id="f-medium"   onclick="toggleFilter('medium')">Medium</button>
+    <button class="pill"        id="f-small"    onclick="toggleFilter('small')">Small</button>
+  </div>
+
+  <div class="vsep"></div>
+
+  <div class="filter-group">
+    <span class="filter-group-label">Type</span>
+    <button class="pill"        id="f-military" onclick="toggleFilter('military')">Military</button>
+    <button class="pill"        id="f-heliport" onclick="toggleFilter('heliport')">Heli</button>
+    <button class="pill"        id="f-seaplane" onclick="toggleFilter('seaplane')">Seaplane</button>
+    <button class="pill"        id="f-closed"   onclick="toggleFilter('closed')">Closed</button>
+  </div>
+
+  <div class="vsep" style="margin-left:auto"></div>
+  <button class="pill overlay-toggle active" id="btn-panel" onclick="togglePanel()" title="Show/hide info panel">▐ Panel</button>
+</header>
+
+<!-- STATUS -->
+<div class="statusbar">
+  <div class="dot" id="status-dot"></div>
+  <span id="status-text" class="loading">LOADING AIRPORT DATABASE...</span>
+  <span style="margin-left:auto">ACTIVE: <span class="val" id="stat-count">–</span></span>
+  <span>ZOOM: <span class="val" id="stat-zoom">–</span></span>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+  <div id="map-wrap">
+    <div id="map"></div>
+    <!-- Canvas overlay: drawn fresh each frame, works identically in Chrome & Firefox -->
+    <canvas id="overlay-canvas"></canvas>
+  </div>
+
+  <div class="panel">
+    <div class="panel-section">
+      <div class="panel-title">Legend</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#00e5ff"></div>Large airport</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ffb300"></div>Medium airport</div>
+      <div class="legend-item"><div class="legend-dot" style="background:rgba(255,179,0,.5)"></div>Small airport</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#ff3b30"></div>Military</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#7090a0"></div>Heliport / Seaplane</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#444;border:1px solid #666"></div>Closed</div>
+    </div>
+    <div class="panel-section">
+      <div class="panel-title">Stats</div>
+      <div class="stat-row"><span class="stat-label">Large</span><span class="stat-val" id="s-large">–</span></div>
+      <div class="stat-row"><span class="stat-label">Medium</span><span class="stat-val" id="s-medium">–</span></div>
+      <div class="stat-row"><span class="stat-label">Small</span><span class="stat-val" id="s-small">–</span></div>
+      <div class="stat-row"><span class="stat-label">Military</span><span class="stat-val" id="s-mil">–</span></div>
+      <div class="stat-row"><span class="stat-label">Closed</span><span class="stat-val" id="s-closed">–</span></div>
+    </div>
+    <div class="nearest-info" id="nearest-panel">
+      <div class="ni-label">Cursor Position</div>
+      <div style="color:var(--text-dim);font-size:10px;line-height:1.8;margin-top:4px">
+        Hover the map to find the nearest airport to any point.
+      </div>
+    </div>
+    <div class="hint">
+      ◎ Hover for nearest airport<br>
+      ⬡ Toggle coloured regions<br>
+      ◈ Filters change the airport set
+    </div>
+  </div>
+</div>
+
+<div id="tooltip"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/kdbush@4.0.2/kdbush.min.js"></script>
+
+<script>
+// ── CONFIG ───────────────────────────────────────────────────────────────────
+// Primary source; falls back to CORS proxy if blocked (e.g. when opened from file://)
+const AIRPORTS_CSV_PRIMARY  = 'https://davidmegginson.github.io/ourairports-data/airports.csv';
+const AIRPORTS_CSV_FALLBACK = 'https://corsproxy.io/?url=https%3A%2F%2Fdavidmegginson.github.io%2Fourairports-data%2Fairports.csv';
+const MILITARY_RE  = /\b(AFB|AAF|AAS|NAS|NAF|MCAS|MCAF|AAB|RAF|RAAF|RCAF|RNZAF|RNAS|ANG|MOD|MoD|Army Air|Air Force|Naval Air|Marine Corps Air)\b/i;
+
+const PALETTE = [
+  '#e63946','#f4845f','#2ec4b6','#3a86ff','#8338ec',
+  '#fb5607','#06d6a0','#ffbe0b','#f72585','#118ab2',
+  '#ef476f','#06aed5','#6a4c93','#1982c4','#8ac926',
+  '#ff595e','#52b788','#d62828','#e9c46a','#264653',
+  '#a8dadc','#457b9d','#c77dff','#f4a261','#48cae4',
+  '#6d6875','#b5838d','#023e8a','#90e0ef','#e76f51',
+];
+
+// ── STATE ────────────────────────────────────────────────────────────────────
+let allAirports      = [];
+let filteredAirports = [];
+let kdIndex          = null;
+let overlayVisible   = true;
+let activeFilters    = new Set(['large']);
+let drawPending      = false;
+
+// ── MAP ──────────────────────────────────────────────────────────────────────
+const map = L.map('map', { center:[30,0], zoom:3, zoomControl:true });
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+  attribution: '© OpenStreetMap contributors © CARTO',
+  subdomains: 'abcd', maxZoom: 19
+}).addTo(map);
+
+setTimeout(() => { map.invalidateSize(); scheduleRedraw(); }, 200);
+
+// ── CANVAS OVERLAY ───────────────────────────────────────────────────────────
+// A plain <canvas> absolutely positioned over the map container.
+// Redrawn completely on every map move/zoom — no coordinate system confusion,
+// works identically in Chrome and Firefox.
+const canvas = document.getElementById('overlay-canvas');
+const ctx    = canvas.getContext('2d');
+
+function resizeCanvas() {
+  const wrap = document.getElementById('map-wrap');
+  canvas.width  = wrap.clientWidth;
+  canvas.height = wrap.clientHeight;
+  scheduleRedraw();
+}
+resizeCanvas();
+new ResizeObserver(resizeCanvas).observe(document.getElementById('map-wrap'));
+
+// ── HELPERS ──────────────────────────────────────────────────────────────────
+function categorize(apt) {
+  const t = apt.type, name = apt.name || '';
+  if (t === 'closed')         return 'closed';
+  if (t === 'heliport')       return 'heliport';
+  if (t === 'seaplane_base')  return 'seaplane';
+  if (MILITARY_RE.test(name)) return 'military';
+  if (t === 'large_airport')  return 'large';
+  if (t === 'medium_airport') return 'medium';
+  return 'small';
+}
+
+function dotColor(cat) {
+  return { large:'#00e5ff', medium:'#ffb300', small:'rgba(255,179,0,0.8)',
+           military:'#ff3b30', heliport:'#7090a0', seaplane:'#7090a0', closed:'#555' }[cat] || '#ffb300';
+}
+function dotRadius(cat) {
+  return { large:5.5, medium:4, small:2.5 }[cat] || 2.5;
+}
+function aptColour(key) {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return PALETTE[h % PALETTE.length];
+}
+function hexToRgb(hex) {
+  const r = parseInt(hex.slice(1,3),16);
+  const g = parseInt(hex.slice(3,5),16);
+  const b = parseInt(hex.slice(5,7),16);
+  return `${r},${g},${b}`;
+}
+function typeBadge(cat) {
+  const c = { large:'#00e5ff', medium:'#ffb300', small:'#a07000',
+               military:'#ff3b30', heliport:'#7090a0', seaplane:'#00bcd4', closed:'#555' }[cat] || '#ffb300';
+  return `<div class="tt-badge" style="border-color:${c};color:${c}">${cat.toUpperCase()}</div>`;
+}
+
+// ── FILTERS ──────────────────────────────────────────────────────────────────
+function toggleFilter(f) {
+  activeFilters.has(f) ? activeFilters.delete(f) : activeFilters.add(f);
+  document.getElementById('f-'+f).classList.toggle('active', activeFilters.has(f));
+  applyFilters();
+}
+function applyFilters() {
+  filteredAirports = allAirports.filter(a => activeFilters.has(a.cat));
+  buildIndex();
+  updateStats();
+  drawOverlay();
+}
+
+// ── TOGGLE OVERLAY ───────────────────────────────────────────────────────────
+function toggleOverlay() {
+  overlayVisible = !overlayVisible;
+  const btn = document.getElementById('btn-overlay');
+  btn.classList.toggle('active', overlayVisible);
+  btn.textContent = overlayVisible ? '⬡ Regions ON' : '⬡ Regions OFF';
+  drawOverlay();
+}
+
+// ── TOGGLE PANEL ─────────────────────────────────────────────────────────────
+function togglePanel() {
+  const panel = document.querySelector('.panel');
+  const btn   = document.getElementById('btn-panel');
+  const collapsed = panel.classList.toggle('collapsed');
+  btn.classList.toggle('active', !collapsed);
+  btn.textContent = collapsed ? '▐ Panel' : '▐ Panel';
+  // Leaflet needs to know the map container changed size
+  setTimeout(() => {
+    map.invalidateSize();
+    scheduleRedraw();
+  }, 260); // after CSS transition finishes
+}
+
+// ── SPATIAL INDEX ────────────────────────────────────────────────────────────
+function buildIndex() {
+  const n = filteredAirports.length;
+  kdIndex = new KDBush(n);
+  for (let i = 0; i < n; i++) kdIndex.add(filteredAirports[i].lon, filteredAirports[i].lat);
+  kdIndex.finish();
+}
+
+function findNearest(lat, lon) {
+  if (!kdIndex || !filteredAirports.length) return null;
+  for (const r of [10, 40, 120, 360]) {
+    const hits = kdIndex.within(lon, lat, r);
+    if (hits.length) return closestOf(lat, lon, hits);
+  }
+  return null;
+}
+
+function closestOf(lat, lon, indices) {
+  let best = null, bestD = Infinity;
+  for (const i of indices) {
+    const a = filteredAirports[i];
+    const d = haversine(lat, lon, a.lat, a.lon);
+    if (d < bestD) { bestD = d; best = { airport: a, dist: d }; }
+  }
+  return best;
+}
+
+function haversine(lat1, lon1, lat2, lon2) {
+  const R = 6371, r = Math.PI / 180;
+  const dLat = (lat2-lat1)*r, dLon = (lon2-lon1)*r;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*r)*Math.cos(lat2*r)*Math.sin(dLon/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ── DRAW ─────────────────────────────────────────────────────────────────────
+function scheduleRedraw() {
+  if (drawPending) return;
+  drawPending = true;
+  requestAnimationFrame(() => { drawPending = false; drawOverlay(); });
+}
+
+function drawOverlay() {
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+  if (!filteredAirports.length) return;
+
+  const zoom = map.getZoom();
+
+  // ── Step 1: Project ALL filtered airports to pixel coords ──────────────────
+  // We do this first so we can filter by pixel distance, not lat/lon.
+  // This avoids the spike/wrap bug where airports on the far side of the world
+  // project to huge negative/positive pixel values and corrupt the Delaunay.
+  const allPts = filteredAirports.map(a => {
+    const p = map.latLngToContainerPoint([a.lat, a.lon]);
+    return [p.x, p.y];
+  });
+
+  // ── Step 2: Keep only points within a pixel-space margin of the canvas ─────
+  // Large margin so Voronoi cells at the edges have neighbours and don't spike.
+  // But exclude anything wildly off-screen (wrapped globe artifacts).
+  const margin  = Math.max(W, H) * 1.2;
+  const maxApts = zoom < 4 ? 600 : zoom < 6 ? 1500 : zoom < 9 ? 5000 : 18000;
+
+  const indices = [];
+  for (let i = 0; i < allPts.length; i++) {
+    const [x, y] = allPts[i];
+    if (x > -margin && x < W + margin && y > -margin && y < H + margin) {
+      indices.push(i);
+      if (indices.length >= maxApts) break;
+    }
+  }
+
+  if (indices.length < 2) return;
+
+  const pts     = indices.map(i => allPts[i]);
+  const visible = indices.map(i => filteredAirports[i]);
+
+  // ── Step 3: Voronoi ────────────────────────────────────────────────────────
+  if (overlayVisible && pts.length >= 3) {
+    // Clip rect = canvas only. Points outside canvas act as neighbours to
+    // anchor edge cells — we just don't draw those off-canvas cells.
+    const delaunay = d3.Delaunay.from(pts);
+    const voronoi  = delaunay.voronoi([0, 0, W, H]);
+
+    for (let i = 0; i < pts.length; i++) {
+      const cell = voronoi.cellPolygon(i);
+      if (!cell || cell.length < 3) continue;
+
+      const colour = aptColour(visible[i].icao || visible[i].name);
+      const rgb    = hexToRgb(colour);
+
+      ctx.beginPath();
+      ctx.moveTo(cell[0][0], cell[0][1]);
+      for (let j = 1; j < cell.length; j++) ctx.lineTo(cell[j][0], cell[j][1]);
+      ctx.closePath();
+      ctx.fillStyle   = `rgba(${rgb},0.38)`;
+      ctx.fill();
+      ctx.strokeStyle = `rgba(${rgb},0.8)`;
+      ctx.lineWidth   = 1;
+      ctx.stroke();
+    }
+  }
+
+  // ── Step 4: Dots (on-screen only) ─────────────────────────────────────────
+  for (let i = 0; i < pts.length; i++) {
+    const [x, y] = pts[i];
+    if (x < -8 || y < -8 || x > W + 8 || y > H + 8) continue;
+    const a = visible[i];
+    const r = dotRadius(a.cat);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fillStyle   = dotColor(a.cat);
+    ctx.globalAlpha = a.cat === 'closed' ? 0.4 : 0.95;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+    ctx.lineWidth   = 0.6;
+    ctx.stroke();
+  }
+
+  document.getElementById('stat-zoom').textContent = zoom;
+}
+
+// ── TOOLTIP & HOVER ──────────────────────────────────────────────────────────
+const tooltip = document.getElementById('tooltip');
+
+document.getElementById('map').addEventListener('mousemove', e => {
+  const rect   = document.getElementById('map').getBoundingClientRect();
+  const latlng = map.containerPointToLatLng(L.point(e.clientX - rect.left, e.clientY - rect.top));
+  const result = findNearest(latlng.lat, latlng.lng);
+  if (!result) { tooltip.style.display = 'none'; return; }
+
+  const { airport: a, dist } = result;
+  const km = dist.toFixed(1), mi = (dist * 0.621371).toFixed(1);
+
+  let tx = e.clientX + 18;
+  const ty = e.clientY - 10;
+  if (tx + 230 > window.innerWidth) tx = e.clientX - 228;
+
+  tooltip.style.display = 'block';
+  tooltip.style.left    = tx + 'px';
+  tooltip.style.top     = ty + 'px';
+  tooltip.innerHTML = `
+    <div class="tt-code">${a.iata || a.icao || '—'}</div>
+    <div class="tt-name">${a.name}</div>
+    ${typeBadge(a.cat)}
+    <div class="tt-row"><span>ICAO</span><span class="tv">${a.icao || '–'}</span></div>
+    <div class="tt-row"><span>IATA</span><span class="tv">${a.iata || '–'}</span></div>
+    <div class="tt-row"><span>DIST</span><span class="tv">${km} km / ${mi} mi</span></div>
+    <div class="tt-row"><span>ELEV</span><span class="tv">${a.elevation_ft ? a.elevation_ft + ' ft' : '–'}</span></div>
+    <div class="tt-row"><span>COUNTRY</span><span class="tv">${a.iso_country || '–'}</span></div>
+  `;
+
+  document.getElementById('nearest-panel').innerHTML = `
+    <div class="ni-label">Nearest Airport</div>
+    <div class="ni-code">${a.iata || a.icao || '—'}</div>
+    <div class="ni-name">${a.name}</div>
+    ${typeBadge(a.cat)}
+    <div class="ni-row"><span class="ni-key">ICAO</span><span class="ni-val">${a.icao || '–'}</span></div>
+    <div class="ni-row"><span class="ni-key">IATA</span><span class="ni-val">${a.iata || '–'}</span></div>
+    <div class="ni-row"><span class="ni-key">Distance</span><span class="ni-val">${km} km / ${mi} mi</span></div>
+    <div class="ni-row"><span class="ni-key">Elevation</span><span class="ni-val">${a.elevation_ft ? a.elevation_ft + ' ft' : '–'}</span></div>
+    <div class="ni-row"><span class="ni-key">Country</span><span class="ni-val">${a.iso_country || '–'}</span></div>
+    <div class="ni-row"><span class="ni-key">Lat</span><span class="ni-val">${a.lat.toFixed(4)}°</span></div>
+    <div class="ni-row"><span class="ni-key">Lon</span><span class="ni-val">${a.lon.toFixed(4)}°</span></div>
+    <hr style="border-color:var(--border);margin:8px 0">
+    <div class="ni-label">Cursor</div>
+    <div class="ni-row"><span class="ni-key">Lat</span><span class="ni-val">${latlng.lat.toFixed(4)}°</span></div>
+    <div class="ni-row"><span class="ni-key">Lon</span><span class="ni-val">${latlng.lng.toFixed(4)}°</span></div>
+  `;
+});
+
+document.getElementById('map').addEventListener('mouseleave', () => {
+  tooltip.style.display = 'none';
+});
+
+// ── STATS ────────────────────────────────────────────────────────────────────
+function updateStats() {
+  const c = {};
+  for (const a of filteredAirports) c[a.cat] = (c[a.cat] || 0) + 1;
+  document.getElementById('s-large').textContent   = (c.large    || 0).toLocaleString();
+  document.getElementById('s-medium').textContent  = (c.medium   || 0).toLocaleString();
+  document.getElementById('s-small').textContent   = (c.small    || 0).toLocaleString();
+  document.getElementById('s-mil').textContent     = (c.military || 0).toLocaleString();
+  document.getElementById('s-closed').textContent  = (c.closed   || 0).toLocaleString();
+  document.getElementById('stat-count').textContent = filteredAirports.length.toLocaleString();
+}
+
+// ── STATUS ───────────────────────────────────────────────────────────────────
+function setStatus(msg, ready = false) {
+  const el = document.getElementById('status-text');
+  el.textContent = msg;
+  el.className   = ready ? 'val' : 'loading';
+  document.getElementById('status-dot').className = ready ? 'dot on' : 'dot';
+}
+
+// ── DATA LOAD ────────────────────────────────────────────────────────────────
+function parseCSV(csvText) {
+  const result = Papa.parse(csvText, { header: true, skipEmptyLines: true });
+  allAirports = [];
+  for (const row of result.data) {
+    const lat = parseFloat(row.latitude_deg);
+    const lon = parseFloat(row.longitude_deg);
+    if (isNaN(lat) || isNaN(lon)) continue;
+    allAirports.push({
+      icao: row.ident || '', iata: row.iata_code || '',
+      name: row.name || 'Unknown', type: row.type || 'small_airport',
+      lat, lon,
+      elevation_ft: row.elevation_ft || '',
+      iso_country:  row.iso_country  || '',
+      cat: null
+    });
+  }
+  for (const a of allAirports) a.cat = categorize(a);
+  setStatus(`READY — ${allAirports.length.toLocaleString()} AIRPORTS LOADED`, true);
+  applyFilters();
+}
+
+async function loadAirports() {
+  // Try primary URL, fall back to CORS proxy if it fails
+  for (const url of [AIRPORTS_CSV_PRIMARY, AIRPORTS_CSV_FALLBACK]) {
+    try {
+      setStatus(url === AIRPORTS_CSV_FALLBACK ? 'RETRYING VIA PROXY...' : 'LOADING AIRPORT DATABASE...');
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const text = await res.text();
+      parseCSV(text);
+      return;
+    } catch (err) {
+      if (url === AIRPORTS_CSV_FALLBACK) {
+        setStatus('ERROR: Could not load airport data. Check your connection.');
+      }
+      // otherwise loop and try fallback
+    }
+  }
+}
+
+loadAirports();
+
+// ── MAP EVENTS ───────────────────────────────────────────────────────────────
+map.on('move',             scheduleRedraw);
+map.on('moveend zoomend',  scheduleRedraw);
+</script>
+</body>
+</html>
